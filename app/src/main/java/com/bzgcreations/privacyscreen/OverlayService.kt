@@ -1,4 +1,4 @@
-package com.example.foldanim
+package com.bzgcreations.privacyscreen
 
 import android.app.Activity
 import android.app.Notification
@@ -30,7 +30,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.ViewModelStore
@@ -41,6 +40,7 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import kotlin.math.abs
 
 class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelStoreOwner, SensorEventListener {
 
@@ -72,11 +72,11 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
         super.onStartCommand(intent, flags, startId)
         
         try {
-            val channel = NotificationChannel("cast", "3D Screen Cast", NotificationManager.IMPORTANCE_LOW)
+            val channel = NotificationChannel("cast", "Privacy Screen", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
             
             val notif = Notification.Builder(this, "cast")
-                .setContentTitle("3D Perspective Active")
+                .setContentTitle("Privacy Screen Active")
                 .setSmallIcon(android.R.drawable.ic_menu_camera)
                 .build()
                 
@@ -88,7 +88,6 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
 
             val code = intent?.getIntExtra("RESULT_CODE", Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
             
-            // Safely get the Intent data across all Android versions
             val data: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent?.getParcelableExtra("DATA", Intent::class.java)
             } else {
@@ -101,7 +100,7 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
                 mediaProjection = mgr.getMediaProjection(code, data)
                 showOverlay()
             } else {
-                stopSelf() // Closes safely if permissions failed
+                stopSelf() 
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -126,7 +125,7 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
 
         composeView = ComposeView(this).apply {
             setContent {
-                LiveScreenPerspective(mediaProjection, tiltProgress)
+                PrivacyScreenPerspective(mediaProjection, tiltProgress)
             }
         }
 
@@ -157,18 +156,32 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
 }
 
 @Composable
-fun LiveScreenPerspective(mediaProjection: MediaProjection?, tiltProgress: Float) {
-    val context = LocalContext.current
-    
-    // Calculate the bending angle (-45 to 45 degrees)
+fun PrivacyScreenPerspective(mediaProjection: MediaProjection?, tiltProgress: Float) {
     val tiltAngle = (tiltProgress - 0.5f) * -90f
+    
+    // Calculates how dark the screen should get based on the tilt
+    val intensity = (abs(tiltAngle) / 45f).coerceIn(0f, 1f)
+    val maxDark = 0.98f * intensity   // Almost pitch black at the deep edge
+    val stretchDark = 0.85f * intensity // Stretches the darkness inward
+    val fadeDark = 0.40f * intensity  // Long fade towards the center
+
+    // Figures out which side of the phone is tilting away from you
+    val leftEdge = if (tiltAngle < 0) maxDark else 0f
+    val leftMid = if (tiltAngle < 0) stretchDark else 0f
+    val centerFade = if (tiltAngle < 0) fadeDark else if (tiltAngle > 0) fadeDark else 0f
+    val rightMid = if (tiltAngle > 0) stretchDark else 0f
+    val rightEdge = if (tiltAngle > 0) maxDark else 0f
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .graphicsLayer {
                 rotationY = tiltAngle
-                cameraDistance = 14f * density // Creates the deep 3D perspective
+                cameraDistance = 14f * density
+                
+                // Zooms in the screen so the corners do not show blank spots when bent
+                scaleX = 1.4f
+                scaleY = 1.4f
             }
     ) {
         if (mediaProjection != null) {
@@ -214,14 +227,17 @@ fun LiveScreenPerspective(mediaProjection: MediaProjection?, tiltProgress: Float
             )
         }
 
-        // The dynamic glass shadow/light gradient that shifts based on rotation
+        // The new privacy screen gradient
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.horizontalGradient(
-                        0.0f to Color.White.copy(alpha = if (tiltAngle < 0) 0.3f else 0.0f),
-                        1.0f to Color.Black.copy(alpha = if (tiltAngle > 0) 0.6f else 0.0f)
+                        0.0f to Color.Black.copy(alpha = leftEdge),
+                        0.2f to Color.Black.copy(alpha = leftMid),
+                        0.5f to Color.Black.copy(alpha = centerFade),
+                        0.8f to Color.Black.copy(alpha = rightMid),
+                        1.0f to Color.Black.copy(alpha = rightEdge)
                     )
                 )
         )

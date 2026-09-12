@@ -10,7 +10,7 @@
         android:allowBackup="true"
         android:hardwareAccelerated="true"
         android:icon="@android:drawable/sym_def_app_icon"
-        android:label="S26 3D Cast"
+        android:label="Privacy Screen"
         android:roundIcon="@android:drawable/sym_def_app_icon"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">

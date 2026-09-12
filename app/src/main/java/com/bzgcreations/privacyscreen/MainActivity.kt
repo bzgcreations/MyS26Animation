@@ -1,4 +1,4 @@
-package com.example.foldanim
+package com.bzgcreations.privacyscreen
 
 import android.app.Activity
 import android.content.Intent
@@ -30,7 +30,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Button(onClick = { requestStart() }) {
-                    Text("Start 3D Morph Screen")
+                    Text("Start Privacy Screen")
                 }
             }
         }

@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.foldanim"
+    namespace = "com.bzgcreations.privacyscreen"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.foldanim"
+        applicationId = "com.bzgcreations.privacyscreen"
         minSdk = 33
         targetSdk = 34
         versionCode = 1
@@ -38,7 +38,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.activity:activity-compose:1.8.2")
     
-    // Required to run Compose inside a Background Service
     implementation("androidx.lifecycle:lifecycle-service:2.7.0")
     
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
