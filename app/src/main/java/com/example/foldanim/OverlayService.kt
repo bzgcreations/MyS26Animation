@@ -1,24 +1,36 @@
 package com.example.foldanim
 
+import android.app.Activity
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
+import android.graphics.SurfaceTexture
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.view.Surface
+import android.view.TextureView
 import android.view.WindowManager
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
@@ -35,6 +47,7 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
     private lateinit var composeView: ComposeView
     private lateinit var sensorManager: SensorManager
     
+    private var mediaProjection: MediaProjection? = null
     private var tiltProgress by mutableFloatStateOf(0.5f)
     
     private val savedStateRegistryController = SavedStateRegistryController.create(this)
@@ -45,7 +58,6 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
     override fun onCreate() {
         super.onCreate()
         savedStateRegistryController.performRestore(null)
-
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
 
@@ -53,26 +65,58 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
         accelerometer?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
         }
+    }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        super.onStartCommand(intent, flags, startId)
+        
+        // 1. Create a notification (required for screen casting)
+        val channel = NotificationChannel("cast", "Screen Cast", NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        
+        val notif = Notification.Builder(this, "cast")
+            .setContentTitle("3D Perspective Active")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .build()
+            
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(1, notif)
+        }
+
+        // 2. Extract permission data and start projection
+        val code = intent?.getIntExtra("RESULT_CODE", Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
+        val data = intent?.getParcelableExtra<Intent>("DATA")
+
+        if (code == Activity.RESULT_OK && data != null) {
+            val mgr = getSystemService(MediaProjectionManager::class.java)
+            mediaProjection = mgr.getMediaProjection(code, data)
+            showOverlay()
+        }
+
+        return START_NOT_STICKY
+    }
+
+    private fun showOverlay() {
+        // FLAG_SECURE stops the projection from capturing THIS overlay, preventing an infinite mirror.
+        // FLAG_NOT_TOUCHABLE lets you click the real apps behind the overlay.
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_BLUR_BEHIND,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or 
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or 
+            WindowManager.LayoutParams.FLAG_SECURE, 
             PixelFormat.TRANSLUCENT
         )
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            params.blurBehindRadius = 60
-        }
-
         composeView = ComposeView(this).apply {
             setContent {
-                OverlayContent(tiltProgress)
+                LiveScreenCaster(mediaProjection, tiltProgress)
             }
         }
 
-        // Updated to use the correct Kotlin extension commands
         composeView.setViewTreeLifecycleOwner(this)
         composeView.setViewTreeSavedStateRegistryOwner(this)
         composeView.setViewTreeViewModelStoreOwner(this)
@@ -92,6 +136,7 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
     override fun onDestroy() {
         super.onDestroy()
         sensorManager.unregisterListener(this)
+        mediaProjection?.stop()
         if (::composeView.isInitialized) {
             windowManager.removeView(composeView)
         }
@@ -99,42 +144,63 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
 }
 
 @Composable
-fun OverlayContent(tiltProgress: Float) {
-    var swipeProgress by remember { mutableFloatStateOf(0.5f) }
-    val activeProgress = (swipeProgress + (tiltProgress - 0.5f)).coerceIn(0f, 1f)
+fun LiveScreenCaster(mediaProjection: MediaProjection?, tiltProgress: Float) {
+    var virtualDisplay by remember { mutableStateOf<VirtualDisplay?>(null) }
+    
+    // Convert phone tilt to a 3D rotation angle (-50 to 50 degrees)
+    val tiltAngle = (tiltProgress - 0.5f) * -100f
 
-    Canvas(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Transparent)
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures { change, dragAmount ->
-                    change.consume()
-                    val delta = dragAmount / size.width
-                    swipeProgress = (swipeProgress + delta).coerceIn(0f, 1f)
-                }
+            .graphicsLayer {
+                rotationY = tiltAngle
+                cameraDistance = 16f * density // The perspective depth
             }
     ) {
-        val width = size.width
-        val height = size.height
-        val splitX = width * activeProgress
+        if (mediaProjection != null) {
+            AndroidView(
+                factory = { context ->
+                    TextureView(context).apply {
+                        surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                                val outputSurface = Surface(surface)
+                                val metrics = context.resources.displayMetrics
+                                
+                                // Route the live screen video into this TextureView
+                                virtualDisplay = mediaProjection.createVirtualDisplay(
+                                    "ScreenCapture",
+                                    metrics.widthPixels, 
+                                    metrics.heightPixels, 
+                                    metrics.densityDpi,
+                                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                                    outputSurface, null, null
+                                )
+                            }
 
-        drawRect(
-            color = Color(0xAA1E1E2C), 
-            topLeft = Offset(0f, 0f),
-            size = Size(splitX, height)
-        )
+                            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+                            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                                virtualDisplay?.release()
+                                return true
+                            }
+                            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
 
-        drawRect(
-            color = Color(0xAA2D3250),
-            topLeft = Offset(splitX, 0f),
-            size = Size(width - splitX, height)
-        )
-
-        drawRect(
-            color = Color.Black.copy(alpha = 0.6f),
-            topLeft = Offset(splitX - 10f, 0f),
-            size = Size(20f, height)
+        // The dynamic frosted glass light/shadow effect
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        0.0f to Color.White.copy(alpha = if (tiltAngle < 0) 0.3f else 0.0f),
+                        1.0f to Color.Black.copy(alpha = if (tiltAngle > 0) 0.5f else 0.0f)
+                    )
+                )
         )
     }
 }
