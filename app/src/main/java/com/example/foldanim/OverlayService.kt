@@ -22,12 +22,12 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
-import androidx.lifecycle.ViewTreeLifecycleOwner
-import androidx.lifecycle.ViewTreeViewModelStoreOwner
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
-import androidx.savedstate.ViewTreeSavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 
 class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelStoreOwner, SensorEventListener {
 
@@ -72,9 +72,10 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
             }
         }
 
-        ViewTreeLifecycleOwner.set(composeView, this)
-        ViewTreeSavedStateRegistryOwner.set(composeView, this)
-        ViewTreeViewModelStoreOwner.set(composeView, this)
+        // Updated to use the correct Kotlin extension commands
+        composeView.setViewTreeLifecycleOwner(this)
+        composeView.setViewTreeSavedStateRegistryOwner(this)
+        composeView.setViewTreeViewModelStoreOwner(this)
 
         windowManager.addView(composeView, params)
     }
