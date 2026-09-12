@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Permissions for overlay, foreground service, and screen recording -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -9,6 +8,7 @@
 
     <application
         android:allowBackup="true"
+        android:hardwareAccelerated="true"
         android:icon="@android:drawable/sym_def_app_icon"
         android:label="S26 3D Cast"
         android:roundIcon="@android:drawable/sym_def_app_icon"
@@ -24,7 +24,6 @@
             </intent-filter>
         </activity>
 
-        <!-- The service must be explicitly marked as a media projection -->
         <service 
             android:name=".OverlayService"
             android:enabled="true"

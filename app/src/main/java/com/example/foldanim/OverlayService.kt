@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.ViewModelStore
@@ -70,50 +71,62 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         
-        // 1. Create a notification (required for screen casting)
-        val channel = NotificationChannel("cast", "Screen Cast", NotificationManager.IMPORTANCE_LOW)
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        
-        val notif = Notification.Builder(this, "cast")
-            .setContentTitle("3D Perspective Active")
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .build()
+        try {
+            val channel = NotificationChannel("cast", "3D Screen Cast", NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
             
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else {
-            startForeground(1, notif)
-        }
+            val notif = Notification.Builder(this, "cast")
+                .setContentTitle("3D Perspective Active")
+                .setSmallIcon(android.R.drawable.ic_menu_camera)
+                .build()
+                
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            } else {
+                startForeground(1, notif)
+            }
 
-        // 2. Extract permission data and start projection
-        val code = intent?.getIntExtra("RESULT_CODE", Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
-        val data = intent?.getParcelableExtra<Intent>("DATA")
+            val code = intent?.getIntExtra("RESULT_CODE", Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
+            
+            // Safely get the Intent data across all Android versions
+            val data: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent?.getParcelableExtra("DATA", Intent::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent?.getParcelableExtra("DATA")
+            }
 
-        if (code == Activity.RESULT_OK && data != null) {
-            val mgr = getSystemService(MediaProjectionManager::class.java)
-            mediaProjection = mgr.getMediaProjection(code, data)
-            showOverlay()
+            if (code == Activity.RESULT_OK && data != null) {
+                val mgr = getSystemService(MediaProjectionManager::class.java)
+                mediaProjection = mgr.getMediaProjection(code, data)
+                showOverlay()
+            } else {
+                stopSelf() // Closes safely if permissions failed
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            stopSelf()
         }
 
         return START_NOT_STICKY
     }
 
     private fun showOverlay() {
-        // FLAG_SECURE stops the projection from capturing THIS overlay, preventing an infinite mirror.
-        // FLAG_NOT_TOUCHABLE lets you click the real apps behind the overlay.
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or 
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or 
+            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
             WindowManager.LayoutParams.FLAG_SECURE, 
             PixelFormat.TRANSLUCENT
         )
 
         composeView = ComposeView(this).apply {
             setContent {
-                LiveScreenCaster(mediaProjection, tiltProgress)
+                LiveScreenPerspective(mediaProjection, tiltProgress)
             }
         }
 
@@ -144,46 +157,56 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
 }
 
 @Composable
-fun LiveScreenCaster(mediaProjection: MediaProjection?, tiltProgress: Float) {
-    var virtualDisplay by remember { mutableStateOf<VirtualDisplay?>(null) }
+fun LiveScreenPerspective(mediaProjection: MediaProjection?, tiltProgress: Float) {
+    val context = LocalContext.current
     
-    // Convert phone tilt to a 3D rotation angle (-50 to 50 degrees)
-    val tiltAngle = (tiltProgress - 0.5f) * -100f
+    // Calculate the bending angle (-45 to 45 degrees)
+    val tiltAngle = (tiltProgress - 0.5f) * -90f
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .graphicsLayer {
                 rotationY = tiltAngle
-                cameraDistance = 16f * density // The perspective depth
+                cameraDistance = 14f * density // Creates the deep 3D perspective
             }
     ) {
         if (mediaProjection != null) {
             AndroidView(
-                factory = { context ->
-                    TextureView(context).apply {
+                factory = { ctx ->
+                    TextureView(ctx).apply {
+                        isOpaque = false
                         surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-                                val outputSurface = Surface(surface)
-                                val metrics = context.resources.displayMetrics
-                                
-                                // Route the live screen video into this TextureView
-                                virtualDisplay = mediaProjection.createVirtualDisplay(
-                                    "ScreenCapture",
-                                    metrics.widthPixels, 
-                                    metrics.heightPixels, 
-                                    metrics.densityDpi,
-                                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                                    outputSurface, null, null
-                                )
+                            var virtualDisplay: VirtualDisplay? = null
+                            var surface: Surface? = null
+
+                            override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
+                                try {
+                                    surface = Surface(st)
+                                    val metrics = ctx.resources.displayMetrics
+                                    
+                                    virtualDisplay = mediaProjection.createVirtualDisplay(
+                                        "ScreenCapture",
+                                        metrics.widthPixels, 
+                                        metrics.heightPixels, 
+                                        metrics.densityDpi,
+                                        DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                                        surface, null, null
+                                    )
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
                             }
 
-                            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
-                            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {}
+                            
+                            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
                                 virtualDisplay?.release()
+                                surface?.release()
                                 return true
                             }
-                            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+                            
+                            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
                         }
                     }
                 },
@@ -191,14 +214,14 @@ fun LiveScreenCaster(mediaProjection: MediaProjection?, tiltProgress: Float) {
             )
         }
 
-        // The dynamic frosted glass light/shadow effect
+        // The dynamic glass shadow/light gradient that shifts based on rotation
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.horizontalGradient(
                         0.0f to Color.White.copy(alpha = if (tiltAngle < 0) 0.3f else 0.0f),
-                        1.0f to Color.Black.copy(alpha = if (tiltAngle > 0) 0.5f else 0.0f)
+                        1.0f to Color.Black.copy(alpha = if (tiltAngle > 0) 0.6f else 0.0f)
                     )
                 )
         )

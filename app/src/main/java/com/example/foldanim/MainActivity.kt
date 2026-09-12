@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -17,7 +18,6 @@ import androidx.compose.ui.Modifier
 
 class MainActivity : ComponentActivity() {
 
-    // Waits for you to hit "Start Recording" on the system pop-up
     private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             startOverlayService(result.resultCode, result.data!!)
@@ -30,7 +30,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Button(onClick = { requestStart() }) {
-                    Text("Start 3D Screen Cast")
+                    Text("Start 3D Morph Screen")
                 }
             }
         }
@@ -54,7 +54,12 @@ class MainActivity : ComponentActivity() {
             putExtra("RESULT_CODE", resultCode)
             putExtra("DATA", data)
         }
-        startForegroundService(intent)
-        finish() // Close the app so you see your home screen
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+        finish() 
     }
 }
